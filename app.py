@@ -1,26 +1,37 @@
-# app.py — Simple Flight Delay Chance Calculator (loads API key from .env)
-# Run with: streamlit run app.py
+# app.py — Flight Delay Chance (simple, cloud-safe)
+# Run locally: streamlit run app.py
 
 import os
-import time
 import requests
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from dotenv import load_dotenv
 
-# ---------- Load environment (.env) ----------
-load_dotenv()  # reads .env if present
-AVIATIONSTACK_KEY = os.getenv("AVIATIONSTACK_KEY", "").strip()
+# -------- Optional .env support (safe on Cloud) --------
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
-# ---------- Config ----------
-DEFAULT_DATA_PATH = "/Users/angeltay/Desktop/projects/airline_delay_cause.csv"   # put your default CSV here
-REQUIRED_COLS = ["carrier_name", "airport_name", "arr_flights", "arr_del15", "arr_delay"]
+# Pull key from env first, then Streamlit secrets (Cloud)
+API_KEY = os.getenv("AVIATIONSTACK_KEY", "")
+if not API_KEY:
+    try:
+        API_KEY = st.secrets.get("AVIATIONSTACK_KEY", "")
+    except Exception:
+        API_KEY = ""
+
+# -------- App config --------
+st.set_page_config(page_title="Flight Delay Chance", layout="wide")
+st.title("✈️ Flight Delay Chance")
+
+# Your default dataset path (case-sensitive)
+DEFAULT_DATA_PATH = "data/Airline_Delay_Cause.csv"
+
+# Column name candidates (the app auto-detects)
 YEAR_CANDIDATES  = ["year", "yr"]
 MONTH_CANDIDATES = ["month", "mnth"]
-
-st.set_page_config(page_title="Flight Delay Chance (Simple)", layout="wide")
-st.title("✈️ Flight Delay Chance")
 
 # ---------- Helpers ----------
 def standardize_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -49,7 +60,7 @@ def load_csv_auto(default_path: str | None, upload) -> pd.DataFrame:
         df = pd.read_csv(default_path)
         return standardize_cols(df)
     raise FileNotFoundError(
-        "No data found. Upload a CSV or place one at data/airline_delays_sample.csv"
+        "No data found. Upload a CSV or place one at data/Airline_Delay_Cause.csv"
     )
 
 def faa_airport_status(iata_code: str) -> dict | None:
@@ -96,23 +107,19 @@ def risk_score(baseline_prob: float, faa_status: dict | None, live_phase: str | 
         score = min(1.0, score + 0.05)
     return max(0.0, min(1.0, score))
 
-# ---------- Sidebar (minimal, no nagging) ----------
+# ---------- Sidebar ----------
 with st.sidebar:
     st.header("Data")
     uploaded = st.file_uploader("Upload CSV (optional)", type=["csv"])
-    st.caption("If you don't upload, the app uses the built-in default dataset automatically.")
+    st.caption("If you don’t upload, the app uses data/Airline_Delay_Cause.csv automatically.")
 
     st.divider()
     st.header("Live (optional)")
-    # If key is present in .env, show a green check; otherwise offer an input once.
-    if AVIATIONSTACK_KEY:
-        st.success("Aviationstack key loaded from .env")
-        aviation_key = AVIATIONSTACK_KEY
+    if API_KEY:
+        st.success("Aviationstack key loaded from environment/secrets.")
     else:
-        aviation_key = st.text_input("Aviationstack API key (optional)", type="password").strip()
-        if aviation_key:
-            st.info("Tip: put this in a .env file as AVIATIONSTACK_KEY so you don't type it again.")
-    arrival_iata = st.text_input("Arrival IATA for FAA status (optional)", value="")  # e.g., RIC
+        st.info("No Aviationstack key found. Live flight lookup will be disabled.")
+    arrival_iata = st.text_input("Arrival IATA for FAA status (optional)", value="").strip()
 
 # ---------- Load data ----------
 try:
@@ -122,6 +129,8 @@ except Exception as e:
     st.stop()
 
 # ---------- Resolve columns (quiet auto) ----------
+# The Kaggle/DoT dataset often has these names:
+# year, month, carrier_name, airport_name, arr_flights, arr_del15, arr_delay, etc.
 carrier_col     = resolve_one(raw, ["carrier_name", "carrier", "op_unique_carrier_name", "op_carrier"]) or "carrier_name"
 airport_col     = resolve_one(raw, ["airport_name", "dest_airport_name", "origin_airport_name", "airport", "dest", "origin"]) or "airport_name"
 arr_flights_col = resolve_one(raw, ["arr_flights", "flights", "num_flights"]) or "arr_flights"
@@ -130,7 +139,7 @@ arr_delay_col   = resolve_one(raw, ["arr_delay", "arrival_delay", "arrdelay", "a
 year_col        = resolve_one(raw, YEAR_CANDIDATES)   # optional
 month_col       = resolve_one(raw, MONTH_CANDIDATES)  # optional
 
-# ---------- Basic type cleanup ----------
+# Basic type cleanup
 for col in [arr_flights_col, arr_del15_col, arr_delay_col, year_col, month_col]:
     if col in raw.columns:
         raw[col] = pd.to_numeric(raw[col], errors="coerce")
@@ -141,13 +150,15 @@ df = df[df[arr_flights_col] > 0]
 # ---------- Aggregate carrier × airport ----------
 grouped = (
     df.groupby([carrier_col, airport_col], as_index=False)
-      .agg(total_flights=(arr_flights_col, "sum"),
-           delayed_flights=(arr_del15_col, "sum"),
-           avg_delay=(arr_delay_col, "mean"))
+      .agg(
+          total_flights=(arr_flights_col, "sum"),
+          delayed_flights=(arr_del15_col, "sum"),
+          avg_delay=(arr_delay_col, "mean"),
+      )
 )
 grouped["delay_probability"] = grouped["delayed_flights"] / grouped["total_flights"]
 
-# ---------- Simple selectors (only valid pairs) ----------
+# ---------- UI: choose valid pair ----------
 st.subheader("Pick a carrier & airport")
 c1, c2 = st.columns(2)
 with c1:
@@ -192,7 +203,7 @@ fig2 = px.bar(peers_carrier, x=airport_col, y="delay_probability",
 fig2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=380)
 st.plotly_chart(fig2, use_container_width=True)
 
-# ---------- Optional monthly trends (auto if year/month exist) ----------
+# ---------- Optional trends (if year/month exist) ----------
 st.divider()
 st.subheader("Trends (if year & month exist)")
 if (year_col in df.columns if year_col else False) and (month_col in df.columns if month_col else False):
@@ -224,15 +235,14 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
 else:
     st.caption("Dataset doesn’t include year/month, so trends are hidden.")
 
-# ---------- Live (appears only if user supplies flight or FAA IATA) ----------
+# ---------- Live (only if user provides flight + key, or FAA IATA) ----------
 st.divider()
 st.subheader("Live tracking (optional)")
 colA, colB, colC = st.columns([1,1,1])
 with colA:
     flight_num = st.text_input("Flight number (e.g., DL123)", value="")
 with colB:
-    # aviation_key is either from .env (green check) or text_input above
-    aviation_key = AVIATIONSTACK_KEY or ""
+    aviation_key = API_KEY  # from env/secrets if available
 with colC:
     arrival_iata = st.text_input("Arrival IATA for FAA", value="").strip()
 
@@ -265,6 +275,9 @@ if show_live or arrival_iata:
 
     with k3:
         baseline = float(sel["delay_probability"].iloc[0]) if not sel.empty else 0.0
-        risk = risk_score(baseline, faa, live_phase)
+        # Very simple live+historical risk blend
+        def _risk(baseline_prob, faa_status, phase):  # local wrapper
+            return risk_score(baseline_prob, faa_status, phase)
+        risk = _risk(baseline, faa, live_phase)
         st.metric("Estimated delay risk", f"{100*risk:.1f}%")
         st.caption(f"Baseline from history: {100*baseline:.1f}%")
