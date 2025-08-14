@@ -217,19 +217,48 @@ reason_summary = (
 )
 grouped = grouped.merge(reason_summary, on=[carrier_col, airport_col], how="left")
 
-# ---------- UI: choose valid pair ----------
-st.subheader("Pick a carrier & airport")
-c1, c2 = st.columns(2)
-with c1:
-    sel_carrier = st.selectbox("Carrier", sorted(grouped[carrier_col].unique()))
-with c2:
-    valid_airports = sorted(grouped.loc[grouped[carrier_col] == sel_carrier, airport_col].unique())
-    sel_airport = st.selectbox("Airport", valid_airports)
+# ---------- UI: choose selection order (Carrier → Airport or Airport → Carrier) ----------
+st.subheader("Pick your route")
 
+# Helper functions from your aggregated table
+def airports_for_carrier(c):
+    return sorted(grouped.loc[grouped[carrier_col] == c, airport_col].unique())
+
+def carriers_for_airport(a):
+    return sorted(grouped.loc[grouped[airport_col] == a, carrier_col].unique())
+
+all_carriers = sorted(grouped[carrier_col].unique())
+all_airports = sorted(grouped[airport_col].unique())
+
+order = st.radio("Select by…", ["Carrier → Airport", "Airport → Carrier"], horizontal=True)
+
+if order == "Carrier → Airport":
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_carrier = st.selectbox("Carrier", all_carriers, key="pick_carrier_first")
+    with c2:
+        valid_airports = airports_for_carrier(sel_carrier)
+        if not valid_airports:
+            st.warning("No airports found for this carrier in your dataset.")
+            st.stop()
+        sel_airport = st.selectbox("Airport (only those with data for this carrier)", valid_airports, key="pick_airport_second")
+else:
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_airport = st.selectbox("Airport", all_airports, key="pick_airport_first")
+    with c2:
+        valid_carriers = carriers_for_airport(sel_airport)
+        if not valid_carriers:
+            st.warning("No carriers found for this airport in your dataset.")
+            st.stop()
+        sel_carrier = st.selectbox("Carrier (only those with data for this airport)", valid_carriers, key="pick_carrier_second")
+
+# Use the selection to locate the row
 sel = grouped[(grouped[carrier_col] == sel_carrier) & (grouped[airport_col] == sel_airport)]
 if sel.empty:
-    st.warning("No data for that pair.")
+    st.warning("No data for that carrier–airport combination.")
     st.stop()
+
 
 # ---------- Metrics ----------
 prob_delay  = float(sel["delay_probability"].iloc[0]) * 100
