@@ -1,5 +1,5 @@
-# app.py — Flight Delay Chance (simple, cloud-safe)
-# Run locally: streamlit run app.py
+# app.py — Flight Delay Chance (simple, cloud-safe, default CSV path set)
+# Run: streamlit run app.py
 
 import os
 import requests
@@ -7,14 +7,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# -------- Optional .env support (safe on Cloud) --------
+# --- optional .env support (safe if missing on Cloud) ---
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-# Pull key from env first, then Streamlit secrets (Cloud)
+# API key from env first, then Streamlit Secrets (Cloud)
 API_KEY = os.getenv("AVIATIONSTACK_KEY", "")
 if not API_KEY:
     try:
@@ -22,14 +22,13 @@ if not API_KEY:
     except Exception:
         API_KEY = ""
 
-# -------- App config --------
 st.set_page_config(page_title="Flight Delay Chance", layout="wide")
 st.title("✈️ Flight Delay Chance")
 
-# Your default dataset path (case-sensitive)
+# ---------- Default dataset path (CASE-SENSITIVE) ----------
 DEFAULT_DATA_PATH = "data/Airline_Delay_Cause.csv"
 
-# Column name candidates (the app auto-detects)
+# Optional time cols
 YEAR_CANDIDATES  = ["year", "yr"]
 MONTH_CANDIDATES = ["month", "mnth"]
 
@@ -52,16 +51,30 @@ def resolve_one(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 @st.cache_data
 def load_csv_auto(default_path: str | None, upload) -> pd.DataFrame:
-    """Priority: 1) user upload, 2) default file, else error."""
+    """
+    Priority:
+      1) User-uploaded CSV
+      2) Default CSV committed to repo at data/Airline_Delay_Cause.csv
+      3) Tiny inline sample (last-resort so app still runs)
+    """
     if upload is not None:
         df = pd.read_csv(upload)
         return standardize_cols(df)
+
     if default_path and os.path.exists(default_path):
         df = pd.read_csv(default_path)
         return standardize_cols(df)
-    raise FileNotFoundError(
-        "No data found. Upload a CSV or place one at data/Airline_Delay_Cause.csv"
-    )
+
+    # fallback sample so app renders even if file missing on Cloud
+    from io import StringIO
+    sample = StringIO("""carrier_name,airport_name,arr_flights,arr_del15,arr_delay,year,month
+Delta Air Lines,Richmond,100,20,8.5,2023,6
+United Airlines,Richmond,80,10,6.2,2023,6
+Delta Air Lines,Atlanta,150,25,7.9,2023,6
+United Airlines,Atlanta,120,18,5.3,2023,6
+""")
+    df = pd.read_csv(sample)
+    return standardize_cols(df)
 
 def faa_airport_status(iata_code: str) -> dict | None:
     """FAA Airport Status API (no key). Example: 'RIC', 'ATL', 'JFK'."""
@@ -111,7 +124,7 @@ def risk_score(baseline_prob: float, faa_status: dict | None, live_phase: str | 
 with st.sidebar:
     st.header("Data")
     uploaded = st.file_uploader("Upload CSV (optional)", type=["csv"])
-    st.caption("If you don’t upload, the app uses data/Airline_Delay_Cause.csv automatically.")
+    st.caption("If you don’t upload, the app uses data/Airline_Delay_Cause.csv automatically (if present).")
 
     st.divider()
     st.header("Live (optional)")
@@ -122,15 +135,9 @@ with st.sidebar:
     arrival_iata = st.text_input("Arrival IATA for FAA status (optional)", value="").strip()
 
 # ---------- Load data ----------
-try:
-    raw = load_csv_auto(DEFAULT_DATA_PATH, uploaded)
-except Exception as e:
-    st.error(str(e))
-    st.stop()
+raw = load_csv_auto(DEFAULT_DATA_PATH, uploaded)
 
 # ---------- Resolve columns (quiet auto) ----------
-# The Kaggle/DoT dataset often has these names:
-# year, month, carrier_name, airport_name, arr_flights, arr_del15, arr_delay, etc.
 carrier_col     = resolve_one(raw, ["carrier_name", "carrier", "op_unique_carrier_name", "op_carrier"]) or "carrier_name"
 airport_col     = resolve_one(raw, ["airport_name", "dest_airport_name", "origin_airport_name", "airport", "dest", "origin"]) or "airport_name"
 arr_flights_col = resolve_one(raw, ["arr_flights", "flights", "num_flights"]) or "arr_flights"
@@ -275,9 +282,6 @@ if show_live or arrival_iata:
 
     with k3:
         baseline = float(sel["delay_probability"].iloc[0]) if not sel.empty else 0.0
-        # Very simple live+historical risk blend
-        def _risk(baseline_prob, faa_status, phase):  # local wrapper
-            return risk_score(baseline_prob, faa_status, phase)
-        risk = _risk(baseline, faa, live_phase)
+        risk = risk_score(baseline, faa, live_phase)
         st.metric("Estimated delay risk", f"{100*risk:.1f}%")
         st.caption(f"Baseline from history: {100*baseline:.1f}%")
