@@ -1,4 +1,4 @@
-# app.py — Flight Delay Chance (simple, cloud-safe, default CSV path set)
+# app.py — Flight Delay Chance (with cancellations + reasons, cloud-safe)
 # Run: streamlit run app.py
 
 import os
@@ -22,8 +22,8 @@ if not API_KEY:
     except Exception:
         API_KEY = ""
 
-st.set_page_config(page_title="Flight Delay Chance", layout="wide")
-st.title("✈️ Flight Delay Chance")
+st.set_page_config(page_title="Flight Delay & Cancellation Risk", layout="wide")
+st.title("✈️ Flight Delay & Cancellation Risk")
 
 # ---------- Default dataset path (CASE-SENSITIVE) ----------
 DEFAULT_DATA_PATH = "data/Airline_Delay_Cause.csv"
@@ -67,11 +67,11 @@ def load_csv_auto(default_path: str | None, upload) -> pd.DataFrame:
 
     # fallback sample so app renders even if file missing on Cloud
     from io import StringIO
-    sample = StringIO("""carrier_name,airport_name,arr_flights,arr_del15,arr_delay,year,month
-Delta Air Lines,Richmond,100,20,8.5,2023,6
-United Airlines,Richmond,80,10,6.2,2023,6
-Delta Air Lines,Atlanta,150,25,7.9,2023,6
-United Airlines,Atlanta,120,18,5.3,2023,6
+    sample = StringIO("""carrier_name,airport_name,arr_flights,arr_del15,arr_delay,year,month,cancellation_code
+Delta Air Lines,Richmond,100,20,8.5,2023,6,A
+United Airlines,Richmond,80,10,6.2,2023,6,B
+Delta Air Lines,Atlanta,150,25,7.9,2023,6,
+United Airlines,Atlanta,120,18,5.3,2023,6,C
 """)
     df = pd.read_csv(sample)
     return standardize_cols(df)
@@ -104,8 +104,8 @@ def aviationstack_flight(flight_number: str, api_key: str) -> dict | None:
         return None
     return None
 
-def risk_score(baseline_prob: float, faa_status: dict | None, live_phase: str | None) -> float:
-    """Blend historical probability (0–1) with simple live signals."""
+def risk_score_delay(baseline_prob: float, faa_status: dict | None, live_phase: str | None) -> float:
+    """Blend historical delay probability (0–1) with simple live signals."""
     score = float(baseline_prob or 0.0)
     if isinstance(faa_status, dict):
         delay = str(faa_status.get("Delay", "")).lower()
@@ -118,6 +118,20 @@ def risk_score(baseline_prob: float, faa_status: dict | None, live_phase: str | 
             score = min(1.0, score + 0.10)
     if live_phase and any(k in live_phase.lower() for k in ["scheduled", "delayed", "on gate", "boarding"]):
         score = min(1.0, score + 0.05)
+    return max(0.0, min(1.0, score))
+
+def risk_score_cancel(baseline_prob: float, faa_status: dict | None, live_phase: str | None) -> float:
+    """Very simple cancellation heuristic (tune as desired)."""
+    score = float(baseline_prob or 0.0)
+    if isinstance(faa_status, dict):
+        delay = str(faa_status.get("Delay", "")).lower()
+        reason = str((faa_status.get("Status") or {}).get("Reason", "")).lower()
+        if "ground stop" in delay or "gs" in reason:
+            score = min(1.0, score + 0.25)
+        elif "ground delay" in delay or "edct" in reason:
+            score = min(1.0, score + 0.10)
+    if live_phase and "cancel" in live_phase.lower():
+        score = 1.0
     return max(0.0, min(1.0, score))
 
 # ---------- Sidebar ----------
@@ -146,7 +160,35 @@ arr_delay_col   = resolve_one(raw, ["arr_delay", "arrival_delay", "arrdelay", "a
 year_col        = resolve_one(raw, YEAR_CANDIDATES)   # optional
 month_col       = resolve_one(raw, MONTH_CANDIDATES)  # optional
 
-# Basic type cleanup
+# ---- Cancellation detection ----
+CANCEL_CANDIDATES = ["cancelled", "canceled", "arr_cancelled", "arr_cancel", "cancelled_flights", "cancellations"]
+cancel_col = resolve_one(raw, CANCEL_CANDIDATES)
+
+# Reason detection & mapping
+reason_col = None
+if "cancellation_code" in raw.columns:
+    reason_col = "cancellation_code"
+elif "cancellation_reason" in raw.columns:
+    reason_col = "cancellation_reason"
+
+CANCEL_REASON_MAP = {"A": "Carrier", "B": "Weather", "C": "NAS", "D": "Security"}
+
+# Build unified cancel flag + reason text
+if cancel_col and cancel_col in raw.columns:
+    raw["_cancel_flag"] = pd.to_numeric(raw[cancel_col], errors="coerce").fillna(0).astype(int)
+elif "cancellation_code" in raw.columns:
+    raw["_cancel_flag"] = raw["cancellation_code"].notna().astype(int)
+else:
+    raw["_cancel_flag"] = 0  # no signal → all zeros, app still runs
+
+if reason_col == "cancellation_code":
+    raw["_cancel_reason"] = raw["cancellation_code"].map(CANCEL_REASON_MAP).fillna("Other/Unknown")
+elif reason_col == "cancellation_reason":
+    raw["_cancel_reason"] = raw["cancellation_reason"].fillna("Unknown")
+else:
+    raw["_cancel_reason"] = "Unknown"
+
+# ---------- Basic type cleanup ----------
 for col in [arr_flights_col, arr_del15_col, arr_delay_col, year_col, month_col]:
     if col in raw.columns:
         raw[col] = pd.to_numeric(raw[col], errors="coerce")
@@ -154,16 +196,26 @@ for col in [arr_flights_col, arr_del15_col, arr_delay_col, year_col, month_col]:
 df = raw.dropna(subset=[carrier_col, airport_col, arr_flights_col, arr_del15_col, arr_delay_col]).copy()
 df = df[df[arr_flights_col] > 0]
 
-# ---------- Aggregate carrier × airport ----------
+# ---------- Aggregate carrier × airport (with cancellations + reasons) ----------
 grouped = (
     df.groupby([carrier_col, airport_col], as_index=False)
       .agg(
-          total_flights=(arr_flights_col, "sum"),
-          delayed_flights=(arr_del15_col, "sum"),
-          avg_delay=(arr_delay_col, "mean"),
+          total_flights   =(arr_flights_col, "sum"),
+          delayed_flights =(arr_del15_col, "sum"),
+          avg_delay       =(arr_delay_col, "mean"),
+          canceled_flights=("_cancel_flag", "sum"),
       )
 )
-grouped["delay_probability"] = grouped["delayed_flights"] / grouped["total_flights"]
+grouped["delay_probability"]  = grouped["delayed_flights"]  / grouped["total_flights"]
+grouped["cancel_probability"] = grouped["canceled_flights"] / grouped["total_flights"]
+
+# Most common cancel reason per carrier-airport
+reason_summary = (
+    raw.groupby([carrier_col, airport_col])["_cancel_reason"]
+       .agg(lambda x: x.mode().iat[0] if not x.mode().empty else "Unknown")
+       .reset_index(name="top_cancel_reason")
+)
+grouped = grouped.merge(reason_summary, on=[carrier_col, airport_col], how="left")
 
 # ---------- UI: choose valid pair ----------
 st.subheader("Pick a carrier & airport")
@@ -180,35 +232,56 @@ if sel.empty:
     st.stop()
 
 # ---------- Metrics ----------
-prob = float(sel["delay_probability"].iloc[0]) * 100
-avg_d = float(sel["avg_delay"].iloc[0])
-tot   = int(sel["total_flights"].iloc[0])
-dly   = int(sel["delayed_flights"].iloc[0])
+prob_delay  = float(sel["delay_probability"].iloc[0]) * 100
+prob_cancel = float(sel["cancel_probability"].iloc[0]) * 100
+avg_d       = float(sel["avg_delay"].iloc[0])
+tot         = int(sel["total_flights"].iloc[0])
+dly         = int(sel["delayed_flights"].iloc[0])
+cnl         = int(sel["canceled_flights"].iloc[0])
+top_reason  = sel["top_cancel_reason"].iloc[0]
 
-m1, m2, m3 = st.columns(3)
-m1.metric("Delay probability", f"{prob:.1f}%")
-m2.metric("Avg delay (min)", f"{avg_d:.1f}")
-m3.metric("Flights analyzed", f"{tot:,}")
-st.caption(f"Delayed flights: {dly:,} / {tot:,}")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Delay probability",  f"{prob_delay:.1f}%")
+m2.metric("Cancel probability", f"{prob_cancel:.2f}%")
+m3.metric("Avg delay (min)",    f"{avg_d:.1f}")
+m4.metric("Flights analyzed",   f"{tot:,}")
+st.caption(f"Delayed: {dly:,} / {tot:,}  •  Canceled: {cnl:,} / {tot:,}")
+st.markdown(f"**Most common cancellation reason:** {top_reason}")
 
 st.divider()
 
-# ---------- Comparisons ----------
-st.subheader(f"Carriers at {sel_airport}")
+# ---------- Comparisons: delay & cancel ----------
+st.subheader(f"Carriers at {sel_airport} — Delay probability")
 peers_airport = grouped[grouped[airport_col] == sel_airport].sort_values("delay_probability", ascending=False)
 fig1 = px.bar(peers_airport, x=carrier_col, y="delay_probability",
-              hover_data=["total_flights", "avg_delay"],
+              hover_data=["total_flights", "avg_delay", "canceled_flights"],
               labels={carrier_col:"Carrier", "delay_probability": "Delay probability"})
-fig1.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=380)
+fig1.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=360)
 st.plotly_chart(fig1, use_container_width=True)
 
-st.subheader(f"Airports for {sel_carrier}")
+st.subheader(f"Carriers at {sel_airport} — Cancel probability")
+peers_airport_cancel = grouped[grouped[airport_col] == sel_airport].sort_values("cancel_probability", ascending=False)
+fig_c1 = px.bar(peers_airport_cancel, x=carrier_col, y="cancel_probability",
+                hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
+                labels={carrier_col:"Carrier", "cancel_probability":"Cancel probability"})
+fig_c1.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".2%", plot_bgcolor="white", height=360)
+st.plotly_chart(fig_c1, use_container_width=True)
+
+st.subheader(f"Airports for {sel_carrier} — Delay probability")
 peers_carrier = grouped[grouped[carrier_col] == sel_carrier].sort_values("delay_probability", ascending=False)
 fig2 = px.bar(peers_carrier, x=airport_col, y="delay_probability",
-              hover_data=["total_flights", "avg_delay"],
+              hover_data=["total_flights", "avg_delay", "canceled_flights"],
               labels={airport_col:"Airport", "delay_probability": "Delay probability"})
-fig2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=380)
+fig2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=360)
 st.plotly_chart(fig2, use_container_width=True)
+
+st.subheader(f"Airports for {sel_carrier} — Cancel probability")
+peers_carrier_cancel = grouped[grouped[carrier_col] == sel_carrier].sort_values("cancel_probability", ascending=False)
+fig_c2 = px.bar(peers_carrier_cancel, x=airport_col, y="cancel_probability",
+                hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
+                labels={airport_col:"Airport", "cancel_probability":"Cancel probability"})
+fig_c2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".2%", plot_bgcolor="white", height=360)
+st.plotly_chart(fig_c2, use_container_width=True)
 
 # ---------- Optional trends (if year/month exist) ----------
 st.divider()
@@ -218,25 +291,33 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
     if not base.empty:
         base[year_col] = base[year_col].astype(int)
         base[month_col] = base[month_col].astype(int)
+
+        # delay trends
         trend = (
             base.groupby([year_col, month_col], as_index=False)
                 .agg(flights=(arr_flights_col, "sum"),
                      delayed=(arr_del15_col, "sum"),
-                     avg_delay=(arr_delay_col, "mean"))
+                     avg_delay=(arr_delay_col, "mean"),
+                     canceled=("_cancel_flag", "sum"))
         )
-        trend["delay_probability"] = trend["delayed"] / trend["flights"]
+        trend["delay_probability"]  = trend["delayed"]  / trend["flights"]
+        trend["cancel_probability"] = trend["canceled"] / trend["flights"]
         trend["date"] = pd.to_datetime(trend[year_col].astype(str) + "-" + trend[month_col].astype(str) + "-01")
         trend = trend.sort_values("date")
 
-        figp = px.line(trend, x="date", y="delay_probability", markers=True,
-                       labels={"date": "Month", "delay_probability": "Delay probability"})
-        figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=350)
-        st.plotly_chart(figp, use_container_width=True)
-
-        figd = px.line(trend, x="date", y="avg_delay", markers=True,
-                       labels={"date": "Month", "avg_delay": "Avg delay (min)"})
-        figd.update_layout(plot_bgcolor="white", height=350)
-        st.plotly_chart(figd, use_container_width=True)
+        cA, cB = st.columns(2)
+        with cA:
+            st.subheader("Delay probability over time")
+            figp = px.line(trend, x="date", y="delay_probability", markers=True,
+                           labels={"date": "Month", "delay_probability": "Delay probability"})
+            figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=320)
+            st.plotly_chart(figp, use_container_width=True)
+        with cB:
+            st.subheader("Cancel probability over time")
+            figc = px.line(trend, x="date", y="cancel_probability", markers=True,
+                           labels={"date": "Month", "cancel_probability": "Cancel probability"})
+            figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=320)
+            st.plotly_chart(figc, use_container_width=True)
     else:
         st.caption("No monthly data for this pair.")
 else:
@@ -259,6 +340,16 @@ if show_live or arrival_iata:
     live_info = aviationstack_flight(flight_num, aviation_key) if show_live else None
     live_phase = (live_info.get("flight_status") if live_info else None) or ""
 
+    # Try to extract a live cancel reason if the API provides one
+    cancel_reason_live = None
+    if isinstance(live_info, dict):
+        # Some providers include a status or reason field; name varies by provider plan.
+        cancel_reason_live = (
+            live_info.get("status_reason")
+            or (live_info.get("status") if isinstance(live_info.get("status"), str) else None)
+            or (live_info.get("flight") or {}).get("status_text")
+        )
+
     k1, k2, k3 = st.columns(3)
     with k1:
         st.markdown("**Arrival airport (FAA)**")
@@ -274,14 +365,22 @@ if show_live or arrival_iata:
         if live_info:
             dep = (live_info.get("departure") or {}).get("iata") or "—"
             arr = (live_info.get("arrival") or {}).get("iata") or "—"
-            st.write(f"Airline: {((live_info.get('airline') or {}).get('name')) or '—'}")
-            st.write(f"Status: **{(live_info.get('flight_status') or '—').title()}**")
+            status = (live_info.get("flight_status") or "—").title()
+            st.write(f"Status: **{status}**")
             st.write(f"Route: {dep} → {arr}")
+            if status.lower() == "cancelled":
+                st.error(f"This flight is **cancelled**" + (f" — Reason: {cancel_reason_live}" if cancel_reason_live else ""))
         else:
             st.write("—")
 
     with k3:
-        baseline = float(sel["delay_probability"].iloc[0]) if not sel.empty else 0.0
-        risk = risk_score(baseline, faa, live_phase)
-        st.metric("Estimated delay risk", f"{100*risk:.1f}%")
-        st.caption(f"Baseline from history: {100*baseline:.1f}%")
+        baseline_delay  = float(sel["delay_probability"].iloc[0]) if not sel.empty else 0.0
+        baseline_cancel = float(sel["cancel_probability"].iloc[0]) if not sel.empty else 0.0
+        risk_delay  = risk_score_delay(baseline_delay, faa, live_phase)
+        risk_cancel = risk_score_cancel(baseline_cancel, faa, live_phase)
+        kA, kB = st.columns(2)
+        with kA:
+            st.metric("Estimated delay risk",  f"{100*risk_delay:.1f}%")
+        with kB:
+            st.metric("Estimated cancel risk", f"{100*risk_cancel:.1f}%")
+        st.caption(f"Baselines — delay: {100*baseline_delay:.1f}% • cancel: {100*baseline_cancel:.2f}%")
