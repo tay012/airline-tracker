@@ -273,9 +273,9 @@ reason_summary = (
 grouped = grouped.merge(reason_summary, on=[carrier_col, airport_col], how="left")
 
 # ---------- UI: choose selection order (Carrier → Airport or Airport → Carrier) ----------
-
 st.subheader("Pick your route")
 
+# Helpers from aggregated table
 def airports_for_carrier(c):
     return sorted(grouped.loc[grouped[carrier_col] == c, airport_col].unique())
 
@@ -289,29 +289,57 @@ order = st.radio("Select by…", ["Carrier → Airport", "Airport → Carrier"],
 
 if order == "Carrier → Airport":
     cols = st.columns(1 if MOBILE else 2)
-    # First picker
+
+    # First picker (Carrier)
     with cols[0]:
-        sel_carrier = st.selectbox("Carrier", all_carriers, key="pick_carrier_first")
-    # Second picker (same column on mobile; second column on desktop)
+        sel_carrier = st.selectbox(
+            "Carrier",
+            all_carriers,
+            key="pick_carrier_first",
+            help="Pick a carrier to see only airports that appear with it in your data."
+        )
+
+    # Second picker (Airport filtered by carrier)
     with (cols[0] if MOBILE else cols[1]):
         valid_airports = airports_for_carrier(sel_carrier)
         if not valid_airports:
             st.warning("No airports found for this carrier in your dataset.")
             st.stop()
-        sel_airport = st.selectbox("Airport (matches your carrier)", valid_airports, key="pick_airport_second")
+        sel_airport = st.selectbox(
+            "Airport (matches your carrier)",
+            valid_airports,
+            key="pick_airport_second"
+        )
+
 else:
     cols = st.columns(1 if MOBILE else 2)
+
+    # First picker (Airport)
     with cols[0]:
-        sel_airport = st.selectbox("Airport", all_airports, key="pick_airport_first")
+        sel_airport = st.selectbox(
+            "Airport",
+            all_airports,
+            key="pick_airport_first",
+            help="Pick an airport to see only carriers that serve it in your data."
+        )
+
+    # Second picker (Carrier filtered by airport)
     with (cols[0] if MOBILE else cols[1]):
         valid_carriers = carriers_for_airport(sel_airport)
         if not valid_carriers:
             st.warning("No carriers found for this airport in your dataset.")
             st.stop()
-        sel_carrier = st.selectbox("Carrier (serves this airport)", valid_carriers, key="pick_carrier_second")
+        sel_carrier = st.selectbox(
+            "Carrier (serves this airport)",
+            valid_carriers,
+            key="pick_carrier_second"
+        )
 
 # Use the selection to locate the row
-sel = grouped[(grouped[carrier_col] == sel_carrier) & (grouped[airport_col] == sel_airport)]
+sel = grouped[
+    (grouped[carrier_col] == sel_carrier) &
+    (grouped[airport_col] == sel_airport)
+]
 if sel.empty:
     st.warning("No data for that carrier–airport combination.")
     st.stop()
@@ -368,13 +396,15 @@ fig_c2 = px.bar(peers_carrier_cancel, x=airport_col, y="cancel_probability",
                 labels={airport_col:"Airport", "cancel_probability":"Cancel probability"})
 fig_c2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h"])
 
-
-# ---------- Optional trends (if year/month exist) ----------
 # ---------- Optional trends (if year/month exist) ----------
 st.divider()
 st.subheader("Trends (if year & month exist)")
+
 if (year_col in df.columns if year_col else False) and (month_col in df.columns if month_col else False):
-    base = df[(df[carrier_col] == sel_carrier) & (df[airport_col] == sel_airport)].dropna(subset=[year_col, month_col]).copy()
+    base = df[(df[carrier_col] == sel_carrier) & (df[airport_col] == sel_airport)].dropna(
+        subset=[year_col, month_col]
+    ).copy()
+
     if not base.empty:
         base[year_col] = base[year_col].astype(int)
         base[month_col] = base[month_col].astype(int)
@@ -388,37 +418,39 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
                     canceled=("_cancel_flag", "sum"),
                 )
         )
-        trend["delay_probability"]  = trend["delayed"]  / trend["flights"]
+
+        trend["delay_probability"] = trend["delayed"] / trend["flights"]
         trend["cancel_probability"] = trend["canceled"] / trend["flights"]
-        trend["date"] = pd.to_datetime(trend[year_col].astype(str) + "-" + trend[month_col].astype(str) + "-01")
+        trend["date"] = pd.to_datetime(
+            trend[year_col].astype(str) + "-" + trend[month_col].astype(str) + "-01"
+        )
         trend = trend.sort_values("date")
 
+        # Create columns that work on mobile/desktop
         cols = st.columns(1 if MOBILE else 2)
 
-with cols[0]:
-    st.subheader("Delay probability over time")
-    figp = px.line(
-        trend, x="date", y="delay_probability", markers=True,
-        labels={"date": "Month", "delay_probability": "Delay probability"},
-    )
-    figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
-    st.plotly_chart(figp, use_container_width=True)
+        with cols[0]:
+            st.subheader("Delay probability over time")
+            figp = px.line(
+                trend, x="date", y="delay_probability", markers=True,
+                labels={"date": "Month", "delay_probability": "Delay probability"},
+            )
+            figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
+            st.plotly_chart(figp, use_container_width=True)
 
-# On mobile we only have one column; reuse cols[0]
-with (cols[0] if MOBILE else cols[1]):
-    st.subheader("Cancel probability over time")
-    figc = px.line(
-        trend, x="date", y="cancel_probability", markers=True,
-        labels={"date": "Month", "cancel_probability": "Cancel probability"},
-    )
-    figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h_trend"])
-    st.plotly_chart(figc, use_container_width=True)
+        with (cols[0] if MOBILE else cols[1]):
+            st.subheader("Cancel probability over time")
+            figc = px.line(
+                trend, x="date", y="cancel_probability", markers=True,
+                labels={"date": "Month", "cancel_probability": "Cancel probability"},
+            )
+            figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h_trend"])
+            st.plotly_chart(figc, use_container_width=True)
 
     else:
-        st.caption("No monthly data for this pair.")
+        st.caption("No monthly data for this carrier–airport combination.")
 else:
     st.caption("Dataset doesn’t include year/month, so trends are hidden.")
-
 
 # ---------- Live (only if user provides flight + key, or FAA IATA) ----------
 st.divider()
