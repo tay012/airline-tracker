@@ -273,7 +273,7 @@ reason_summary = (
 grouped = grouped.merge(reason_summary, on=[carrier_col, airport_col], how="left")
 
 # ---------- UI: choose selection order (Carrier → Airport or Airport → Carrier) ----------
-# ---------- UI: choose selection order (Carrier → Airport or Airport → Carrier) ----------
+
 st.subheader("Pick your route")
 
 def airports_for_carrier(c):
@@ -310,11 +310,6 @@ else:
             st.stop()
         sel_carrier = st.selectbox("Carrier (serves this airport)", valid_carriers, key="pick_carrier_second")
 
-# Use the selection to locate the row
-sel = grouped[(grouped[carrier_col] == sel_carrier) & (grouped[airport_col] == sel_airport)]
-if sel.empty:
-    st.warning("No data for that carrier–airport combination.")
-    st.stop()
 # Use the selection to locate the row
 sel = grouped[(grouped[carrier_col] == sel_carrier) & (grouped[airport_col] == sel_airport)]
 if sel.empty:
@@ -375,6 +370,7 @@ fig_c2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", pl
 
 
 # ---------- Optional trends (if year/month exist) ----------
+# ---------- Optional trends (if year/month exist) ----------
 st.divider()
 st.subheader("Trends (if year & month exist)")
 if (year_col in df.columns if year_col else False) and (month_col in df.columns if month_col else False):
@@ -383,31 +379,37 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
         base[year_col] = base[year_col].astype(int)
         base[month_col] = base[month_col].astype(int)
 
-        # delay trends
         trend = (
             base.groupby([year_col, month_col], as_index=False)
-                .agg(flights=(arr_flights_col, "sum"),
-                     delayed=(arr_del15_col, "sum"),
-                     avg_delay=(arr_delay_col, "mean"),
-                     canceled=("_cancel_flag", "sum"))
+                .agg(
+                    flights=(arr_flights_col, "sum"),
+                    delayed=(arr_del15_col, "sum"),
+                    avg_delay=(arr_delay_col, "mean"),
+                    canceled=("_cancel_flag", "sum"),
+                )
         )
         trend["delay_probability"]  = trend["delayed"]  / trend["flights"]
         trend["cancel_probability"] = trend["canceled"] / trend["flights"]
         trend["date"] = pd.to_datetime(trend[year_col].astype(str) + "-" + trend[month_col].astype(str) + "-01")
         trend = trend.sort_values("date")
 
-        cA, cB = st.columns(2)
+        cA, cB = st.columns(1 if MOBILE else 2)
         with cA:
             st.subheader("Delay probability over time")
-            figp = px.line(trend, x="date", y="delay_probability", markers=True,
-                           labels={"date": "Month", "delay_probability": "Delay probability"})
+            figp = px.line(
+                trend, x="date", y="delay_probability", markers=True,
+                labels={"date": "Month", "delay_probability": "Delay probability"},
+            )
             figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
-            figd.update_layout(plot_bgcolor="white", height=UI["chart_h_trend"])
+            st.plotly_chart(figp, use_container_width=True)
+
         with cB:
             st.subheader("Cancel probability over time")
-            figc = px.line(trend, x="date", y="cancel_probability", markers=True,
-                           labels={"date": "Month", "cancel_probability": "Cancel probability"})
-            figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=320)
+            figc = px.line(
+                trend, x="date", y="cancel_probability", markers=True,
+                labels={"date": "Month", "cancel_probability": "Cancel probability"},
+            )
+            figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h_trend"])
             st.plotly_chart(figc, use_container_width=True)
     else:
         st.caption("No monthly data for this pair.")
