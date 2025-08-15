@@ -365,6 +365,26 @@ st.markdown(f"**Most common cancellation reason:** {top_reason}")
 st.divider()
 
 # ---------- Comparisons: delay & cancel ----------
+
+# Helper: shorten long labels for mobile
+def shorten_labels(labels, max_len=12):
+    return [lbl if len(lbl) <= max_len else lbl[:max_len] + "…" for lbl in labels]
+
+# Example: Airports Delay Probability chart
+fig2 = px.bar(peers_carrier, 
+              x=shorten_labels(peers_carrier[airport_col], max_len=14 if MOBILE else 20), 
+              y="delay_probability",
+              hover_data=["total_flights", "avg_delay", "canceled_flights"],
+              labels={airport_col:"Airport", "delay_probability": "Delay probability"})
+
+fig2.update_layout(
+    xaxis_tickangle=-35 if MOBILE else -45,
+    yaxis_tickformat=".0%",
+    plot_bgcolor="white",
+    height=UI["chart_h"] + (80 if MOBILE else 0)  # give more room for labels
+)
+st.plotly_chart(fig2, use_container_width=True)
+
 st.subheader(f"Carriers at {sel_airport} — Delay probability")
 peers_airport = grouped[grouped[airport_col] == sel_airport].sort_values("delay_probability", ascending=False)
 fig1 = px.bar(peers_airport, x=carrier_col, y="delay_probability",
