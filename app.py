@@ -14,6 +14,61 @@ try:
 except Exception:
     pass
 
+# --- Mobile-friendly settings ---
+st.set_page_config(page_title="Flight Delay & Cancellation Risk",
+                   layout="wide",
+                   initial_sidebar_state="collapsed")
+
+# Toggle to optimize layout for small screens (iPhone)
+with st.sidebar:
+    MOBILE = st.toggle("📱 Mobile mode (iPhone)", value=True, help="Optimizes spacing and chart sizes for phones")
+
+# CSS tweaks for small screens & better touch targets
+mobile_css = f"""
+<style>
+/* Make content breathe less on small screens */
+@media (max-width: 640px) {{
+  .block-container {{ padding: 0.6rem 0.6rem !important; }}
+  h1, h2, h3 {{ line-height: 1.2; }}
+}}
+
+/* Bigger tap targets for select boxes, radios, buttons */
+.stButton>button, .stDownloadButton>button {{
+  padding: { '0.9rem 1rem' if MOBILE else '0.55rem 0.8rem' };
+  border-radius: 12px;
+}}
+.stRadio > div[role='radiogroup'] label, label {{
+  font-size: { '1.0rem' if MOBILE else '0.95rem' };
+}}
+
+/* Let charts fill width and avoid horizontal scroll */
+.stPlotlyChart {{ width: 100% !important; }}
+
+/* Center metrics on narrow screens */
+@media (max-width: 640px) {{
+  div[data-testid="metric-container"] {{ text-align: center; }}
+  div[data-testid="stHorizontalBlock"] > div {{ width: 100% !important; display:block; }}
+}}
+
+/* Make sidebar semi-translucent and easier to read on phones */
+[data-testid="stSidebar"] > div:first-child {{
+  backdrop-filter: blur(4px);
+}}
+</style>
+"""
+st.markdown(mobile_css, unsafe_allow_html=True)
+
+# Helper to pick sensible sizes
+def ui_sizes(mobile: bool):
+    return {
+        "chart_h": 260 if mobile else 380,
+        "chart_h_trend": 250 if mobile else 350,
+        "tickangle": -25 if mobile else -35,
+    }
+
+UI = ui_sizes(MOBILE)
+
+
 # API key from env first, then Streamlit Secrets (Cloud)
 API_KEY = os.getenv("AVIATIONSTACK_KEY", "")
 if not API_KEY:
@@ -219,39 +274,23 @@ grouped = grouped.merge(reason_summary, on=[carrier_col, airport_col], how="left
 
 # ---------- UI: choose selection order (Carrier → Airport or Airport → Carrier) ----------
 st.subheader("Pick your route")
-
-# Helper functions from your aggregated table
-def airports_for_carrier(c):
-    return sorted(grouped.loc[grouped[carrier_col] == c, airport_col].unique())
-
-def carriers_for_airport(a):
-    return sorted(grouped.loc[grouped[airport_col] == a, carrier_col].unique())
-
-all_carriers = sorted(grouped[carrier_col].unique())
-all_airports = sorted(grouped[airport_col].unique())
-
-order = st.radio("Select by…", ["Carrier → Airport", "Airport → Carrier"], horizontal=True)
+order = st.radio("Select by…", ["Carrier → Airport", "Airport → Carrier"],
+                 horizontal=not MOBILE)
 
 if order == "Carrier → Airport":
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns(1 if MOBILE else 2)
     with c1:
-        sel_carrier = st.selectbox("Carrier", all_carriers, key="pick_carrier_first")
+        sel_carrier = st.selectbox("Carrier", sorted(grouped[carrier_col].unique()), key="pick_carrier_first")
     with c2:
-        valid_airports = airports_for_carrier(sel_carrier)
-        if not valid_airports:
-            st.warning("No airports found for this carrier in your dataset.")
-            st.stop()
-        sel_airport = st.selectbox("Airport (only those with data for this carrier)", valid_airports, key="pick_airport_second")
+        valid_airports = sorted(grouped.loc[grouped[carrier_col] == sel_carrier, airport_col].unique())
+        sel_airport = st.selectbox("Airport (matches your carrier)", valid_airports, key="pick_airport_second")
 else:
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns(1 if MOBILE else 2)
     with c1:
-        sel_airport = st.selectbox("Airport", all_airports, key="pick_airport_first")
+        sel_airport = st.selectbox("Airport", sorted(grouped[airport_col].unique()), key="pick_airport_first")
     with c2:
-        valid_carriers = carriers_for_airport(sel_airport)
-        if not valid_carriers:
-            st.warning("No carriers found for this airport in your dataset.")
-            st.stop()
-        sel_carrier = st.selectbox("Carrier (only those with data for this airport)", valid_carriers, key="pick_carrier_second")
+        valid_carriers = sorted(grouped.loc[grouped[airport_col] == sel_airport, carrier_col].unique())
+        sel_carrier = st.selectbox("Carrier (serves this airport)", valid_carriers, key="pick_carrier_second")
 
 # Use the selection to locate the row
 sel = grouped[(grouped[carrier_col] == sel_carrier) & (grouped[airport_col] == sel_airport)]
@@ -285,7 +324,7 @@ peers_airport = grouped[grouped[airport_col] == sel_airport].sort_values("delay_
 fig1 = px.bar(peers_airport, x=carrier_col, y="delay_probability",
               hover_data=["total_flights", "avg_delay", "canceled_flights"],
               labels={carrier_col:"Carrier", "delay_probability": "Delay probability"})
-fig1.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=360)
+fig1.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h"])
 st.plotly_chart(fig1, use_container_width=True)
 
 st.subheader(f"Carriers at {sel_airport} — Cancel probability")
@@ -293,15 +332,15 @@ peers_airport_cancel = grouped[grouped[airport_col] == sel_airport].sort_values(
 fig_c1 = px.bar(peers_airport_cancel, x=carrier_col, y="cancel_probability",
                 hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
                 labels={carrier_col:"Carrier", "cancel_probability":"Cancel probability"})
-fig_c1.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".2%", plot_bgcolor="white", height=360)
-st.plotly_chart(fig_c1, use_container_width=True)
+fig_c1.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h"])
+
 
 st.subheader(f"Airports for {sel_carrier} — Delay probability")
 peers_carrier = grouped[grouped[carrier_col] == sel_carrier].sort_values("delay_probability", ascending=False)
 fig2 = px.bar(peers_carrier, x=airport_col, y="delay_probability",
               hover_data=["total_flights", "avg_delay", "canceled_flights"],
               labels={airport_col:"Airport", "delay_probability": "Delay probability"})
-fig2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".0%", plot_bgcolor="white", height=360)
+fig2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h"])
 st.plotly_chart(fig2, use_container_width=True)
 
 st.subheader(f"Airports for {sel_carrier} — Cancel probability")
@@ -309,8 +348,8 @@ peers_carrier_cancel = grouped[grouped[carrier_col] == sel_carrier].sort_values(
 fig_c2 = px.bar(peers_carrier_cancel, x=airport_col, y="cancel_probability",
                 hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
                 labels={airport_col:"Airport", "cancel_probability":"Cancel probability"})
-fig_c2.update_layout(xaxis_tickangle=-35, yaxis_tickformat=".2%", plot_bgcolor="white", height=360)
-st.plotly_chart(fig_c2, use_container_width=True)
+fig_c2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h"])
+
 
 # ---------- Optional trends (if year/month exist) ----------
 st.divider()
@@ -339,8 +378,8 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
             st.subheader("Delay probability over time")
             figp = px.line(trend, x="date", y="delay_probability", markers=True,
                            labels={"date": "Month", "delay_probability": "Delay probability"})
-            figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=320)
-            st.plotly_chart(figp, use_container_width=True)
+            figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
+figd.update_layout(plot_bgcolor="white", height=UI["chart_h_trend"])
         with cB:
             st.subheader("Cancel probability over time")
             figc = px.line(trend, x="date", y="cancel_probability", markers=True,
