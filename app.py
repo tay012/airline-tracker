@@ -393,28 +393,32 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
         trend["date"] = pd.to_datetime(trend[year_col].astype(str) + "-" + trend[month_col].astype(str) + "-01")
         trend = trend.sort_values("date")
 
-        cA, cB = st.columns(1 if MOBILE else 2)
-        with cA:
-            st.subheader("Delay probability over time")
-            figp = px.line(
-                trend, x="date", y="delay_probability", markers=True,
-                labels={"date": "Month", "delay_probability": "Delay probability"},
-            )
-            figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
-            st.plotly_chart(figp, use_container_width=True)
+        cols = st.columns(1 if MOBILE else 2)
 
-        with cB:
-            st.subheader("Cancel probability over time")
-            figc = px.line(
-                trend, x="date", y="cancel_probability", markers=True,
-                labels={"date": "Month", "cancel_probability": "Cancel probability"},
-            )
-            figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h_trend"])
-            st.plotly_chart(figc, use_container_width=True)
+with cols[0]:
+    st.subheader("Delay probability over time")
+    figp = px.line(
+        trend, x="date", y="delay_probability", markers=True,
+        labels={"date": "Month", "delay_probability": "Delay probability"},
+    )
+    figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
+    st.plotly_chart(figp, use_container_width=True)
+
+# On mobile we only have one column; reuse cols[0]
+with (cols[0] if MOBILE else cols[1]):
+    st.subheader("Cancel probability over time")
+    figc = px.line(
+        trend, x="date", y="cancel_probability", markers=True,
+        labels={"date": "Month", "cancel_probability": "Cancel probability"},
+    )
+    figc.update_layout(yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h_trend"])
+    st.plotly_chart(figc, use_container_width=True)
+
     else:
         st.caption("No monthly data for this pair.")
 else:
     st.caption("Dataset doesn’t include year/month, so trends are hidden.")
+
 
 # ---------- Live (only if user provides flight + key, or FAA IATA) ----------
 st.divider()
