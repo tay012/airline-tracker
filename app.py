@@ -379,7 +379,7 @@ if (year_col in df.columns if year_col else False) and (month_col in df.columns 
             figp = px.line(trend, x="date", y="delay_probability", markers=True,
                            labels={"date": "Month", "delay_probability": "Delay probability"})
             figp.update_layout(yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h_trend"])
-figd.update_layout(plot_bgcolor="white", height=UI["chart_h_trend"])
+            figd.update_layout(plot_bgcolor="white", height=UI["chart_h_trend"])
         with cB:
             st.subheader("Cancel probability over time")
             figc = px.line(trend, x="date", y="cancel_probability", markers=True,
