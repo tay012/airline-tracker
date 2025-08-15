@@ -365,56 +365,66 @@ st.markdown(f"**Most common cancellation reason:** {top_reason}")
 st.divider()
 
 # ---------- Comparisons: delay & cancel ----------
+# ---------- Helper for mobile-friendly x labels ----------
+def shorten_labels(values, max_len_mobile=14, max_len_desktop=22):
+    max_len = max_len_mobile if MOBILE else max_len_desktop
+    out = []
+    for v in values.astype(str).tolist():
+        out.append(v if len(v) <= max_len else v[:max_len] + "…")
+    return out
 
-# Helper: shorten long labels for mobile
-def shorten_labels(labels, max_len=12):
-    return [lbl if len(lbl) <= max_len else lbl[:max_len] + "…" for lbl in labels]
+# ---------- Airports for <Carrier> — Delay probability (MOBILE SAFE) ----------
+st.subheader(f"Airports for {sel_carrier} — Delay probability")
+airports_df = peers_carrier.copy()
+airports_df["_short"] = shorten_labels(airports_df[airport_col])
 
-# Example: Airports Delay Probability chart
-fig2 = px.bar(peers_carrier, 
-              x=shorten_labels(peers_carrier[airport_col], max_len=14 if MOBILE else 20), 
-              y="delay_probability",
-              hover_data=["total_flights", "avg_delay", "canceled_flights"],
-              labels={airport_col:"Airport", "delay_probability": "Delay probability"})
-
+fig2 = px.bar(
+    airports_df,
+    x="_short",
+    y="delay_probability",
+    hover_data=["total_flights", "avg_delay"],
+    labels={"_short": "Airport", "delay_probability": "Delay probability"},
+    custom_data=[airports_df[airport_col]],  # keep full name for tooltip
+)
+fig2.update_traces(
+    hovertemplate="<b>%{customdata[0]}</b><br>Delay probability=%{y:.0%}"
+                  "<br>Flights=%{customdata[0]|string}<extra></extra>"
+)
 fig2.update_layout(
-    xaxis_tickangle=-35 if MOBILE else -45,
+    xaxis_tickangle=-25 if MOBILE else -35,
     yaxis_tickformat=".0%",
     plot_bgcolor="white",
-    height=UI["chart_h"] + (80 if MOBILE else 0)  # give more room for labels
+    height=UI["chart_h"] + (80 if MOBILE else 0),  # extra room for labels on phones
+    margin=dict(l=10, r=10, t=40, b=10),
 )
 st.plotly_chart(fig2, use_container_width=True)
 
-st.subheader(f"Carriers at {sel_airport} — Delay probability")
-peers_airport = grouped[grouped[airport_col] == sel_airport].sort_values("delay_probability", ascending=False)
-fig1 = px.bar(peers_airport, x=carrier_col, y="delay_probability",
-              hover_data=["total_flights", "avg_delay", "canceled_flights"],
-              labels={carrier_col:"Carrier", "delay_probability": "Delay probability"})
-fig1.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h"])
-st.plotly_chart(fig1, use_container_width=True)
-
-st.subheader(f"Carriers at {sel_airport} — Cancel probability")
-peers_airport_cancel = grouped[grouped[airport_col] == sel_airport].sort_values("cancel_probability", ascending=False)
-fig_c1 = px.bar(peers_airport_cancel, x=carrier_col, y="cancel_probability",
-                hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
-                labels={carrier_col:"Carrier", "cancel_probability":"Cancel probability"})
-fig_c1.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h"])
-
-
-st.subheader(f"Airports for {sel_carrier} — Delay probability")
-peers_carrier = grouped[grouped[carrier_col] == sel_carrier].sort_values("delay_probability", ascending=False)
-fig2 = px.bar(peers_carrier, x=airport_col, y="delay_probability",
-              hover_data=["total_flights", "avg_delay", "canceled_flights"],
-              labels={airport_col:"Airport", "delay_probability": "Delay probability"})
-fig2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".0%", plot_bgcolor="white", height=UI["chart_h"])
-st.plotly_chart(fig2, use_container_width=True)
-
+# ---------- Airports for <Carrier> — Cancel probability (MOBILE SAFE) ----------
 st.subheader(f"Airports for {sel_carrier} — Cancel probability")
-peers_carrier_cancel = grouped[grouped[carrier_col] == sel_carrier].sort_values("cancel_probability", ascending=False)
-fig_c2 = px.bar(peers_carrier_cancel, x=airport_col, y="cancel_probability",
-                hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
-                labels={airport_col:"Airport", "cancel_probability":"Cancel probability"})
-fig_c2.update_layout(xaxis_tickangle=UI["tickangle"], yaxis_tickformat=".2%", plot_bgcolor="white", height=UI["chart_h"])
+airports_cancel_df = peers_carrier_cancel.copy()
+airports_cancel_df["_short"] = shorten_labels(airports_cancel_df[airport_col])
+
+fig_c2 = px.bar(
+    airports_cancel_df,
+    x="_short",
+    y="cancel_probability",
+    hover_data=["total_flights", "canceled_flights", "top_cancel_reason"],
+    labels={"_short": "Airport", "cancel_probability": "Cancel probability"},
+    custom_data=[airports_cancel_df[airport_col]],  # full name for tooltip
+)
+fig_c2.update_traces(
+    hovertemplate="<b>%{customdata[0]}</b><br>Cancel probability=%{y:.2%}"
+                  "<br>Top reason=%{meta}<extra></extra>",
+    meta=airports_cancel_df.get("top_cancel_reason", "—"),
+)
+fig_c2.update_layout(
+    xaxis_tickangle=-25 if MOBILE else -35,
+    yaxis_tickformat=".2%",
+    plot_bgcolor="white",
+    height=UI["chart_h"] + (80 if MOBILE else 0),
+    margin=dict(l=10, r=10, t=40, b=10),
+)
+st.plotly_chart(fig_c2, use_container_width=True)
 
 # ---------- Optional trends (if year/month exist) ----------
 st.divider()
