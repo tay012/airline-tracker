@@ -1,53 +1,52 @@
-**Data 301**
+✈️ Live Flight Delay & Cancellation Tracker
 
-**Project 2**
+A real-time flight delay and cancellation dashboard built with Streamlit, powered by live data from AviationStack
+ (or optionally, the free OpenSky Network
+ API).
+The app provides an interactive interface for tracking airline performance, viewing flight statuses, and estimating the probability of flight delays and cancellations.
 
-## Motivation: Pandas, Data Cleaning, Feature Engineering, PCA, Kmeans, HDBSCAN
+🚀 Features
 
-## Data:
+Live flight data (from AviationStack or OpenSky Network)
 
-You are given a subset of data from a marketing campaign. It contains
-861 rows, each row has 29 columns. See Proj2_Data_Description.pdf for a
-description of each feature.
+Filter by airline, airport, and status (e.g., scheduled, active, landed, cancelled)
 
-## Notebook:
+Dynamic visualizations:
 
-Project2_Student.ipynb -- please complete all TODOs in this notebook
+Pie charts for airline and delay distribution
 
-## Requirements
+Bar charts for route-level delay rates
 
-Analyze data, deduce clusters, attempt to determine what clusters mean.
+KPIs showing counts of scheduled, delayed, and cancelled flights
 
--   Please do not use any 'for' or 'while' loops when operating on
-    DataFrames and Series, map and apply only for all significant
-    operations.
+Tabs for easy navigation between:
 
--   Impute all missing Incomes -- do not use average of entire column,
-    see notebook for suggestions.
+All flights
 
--   Reduce number of features (PCA, combining columns etc.. ) see
-    notebook
+Scheduled, Active, Landed, Cancelled, etc.
 
--   Drop any columns that provide no information
+Delays tab for full delay analytics
 
--   Convert dates to a format that is suitable for an algorithm that
-    uses euclidean distance as a metric.
+Automatic API key fallback (if your primary AviationStack key exceeds quota)
 
--   Fix any obvious outliers
+Dark mode optimized UI
 
--   Run PCA on remaining columns
+🧩 Data Sources
+Option 1: AviationStack (default)
 
--   Cluster Data using Kmeans and HDBSCAN algorithms
+Provides structured global flight data with fields like:
 
--   Please see TODO's in provided notebook.
+Airline IATA/ICAO
 
--   Try to interpret the clusters generated. Or what traits distinguish
-    one cluster from another (you will have to do several plots for
-    this, Seaborn's pairplot may help). This is the hardest part of
-    clustering,
+Origin and destination airports
 
-## Grading
+Scheduled and actual departure/arrival times
 
-I will clone your repo, then run your notebook. I will verify that you
-have pre processed the data appropriately, then verify your cluster
-analysis and the conclusions you have drawn.
+Delay minutes and cancellation flags
+
+⚠️ Free plans are limited to 500 requests/month — consider adding a backup key.
+
+Option 2: OpenSky Network (free fallback)
+
+Fetches live aircraft telemetry (position, speed, callsign).
+Does not include official flight delay/cancellation data but can be used to infer traffic around airports.
